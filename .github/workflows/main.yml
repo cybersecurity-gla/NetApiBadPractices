@@ -1,55 +1,59 @@
-name: DeepSource .NET 8 Analysis
+name: DeepSource Test Coverage
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
   DOTNET_VERSION: '8.0.x'
 
 jobs:
-  build-and-test:
-    name: Build and Test
+  test-and-report-coverage:
+    name: Run Tests and Report Coverage
     runs-on: ubuntu-latest
-    
+
     steps:
-    - name: Checkout código
-      uses: actions/checkout@v4
-      with:
-        # Importante para análisis preciso en PRs
-        ref: ${{ github.event.pull_request.head.sha }}
+      - name: Checkout code
+        # Uses the PR head SHA to prevent analysis of a merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Restaurar dependencias
-      run: dotnet restore TemplateNetBase.sln
+      - name: Restore dependencies
+        run: dotnet restore src/BadApiExample.csproj
 
-    - name: Build solución
-      run: dotnet build TemplateNetBase.sln --configuration Release --no-restore
+      - name: Build project
+        run: dotnet build src/BadApiExample.csproj --configuration Release --no-restore
 
-    - name: Ejecutar tests
-      run: dotnet test TemplateNetBase.sln --configuration Release --no-build --verbosity normal
+      - name: Run tests with coverage collection
+        # Generates a coverage report in Cobertura format
+        run: |
+          dotnet test test/BadApiExample.Tests.csproj \
+            --configuration Release \
+            --no-build \
+            --collect:"XPlat Code Coverage" \
+            --results-directory /tmp/test-results/
 
-  deepsource-analysis:
-    name: DeepSource Code Analysis
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    
-    steps:
-    - name: Checkout código
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ github.event.pull_request.head.sha }}
+      - name: Find and print coverage file
+        run: |
+          find /tmp/test-results -name "*.xml" | head -1 | xargs cat || echo "Coverage file not found."
 
-    - name: Instalar CLI de DeepSource
-      run: curl https://deepsource.io/cli | sh
+      - name: Install DeepSource CLI
+        run: curl -s https://deepsource.io/cli | sh
 
-    - name: Ejecutar análisis DeepSource
-      run: ./bin/deepsource analyze
-      env:
-        DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
+      - name: Report coverage to DeepSource
+        # Reports the coverage file to DeepSource
+        run: |
+          ./bin/deepsource report \
+            --analyzer test-coverage \
+            --key csharp \
+            --value-file /tmp/test-results/*/coverage.cobertura.xml
+        env:
+          DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
