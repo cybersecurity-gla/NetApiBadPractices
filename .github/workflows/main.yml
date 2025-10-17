@@ -1,0 +1,143 @@
+name: DeepSource .NET 8 Analysis
+
+on:
+  push:
+    branches: [ main, develop, release/* ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '0 3 * * 0'
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
+  SRC_PATH: './src'
+  TEST_PATH: './test'
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Cache dependencias NuGet
+      uses: actions/cache@v3
+      with:
+        path: ~/.nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restaurar dependencias API
+      run: dotnet restore ${{ env.SRC_PATH }}
+
+    - name: Restaurar dependencias Tests
+      run: dotnet restore ${{ env.TEST_PATH }}
+
+    - name: Build API
+      run: dotnet build ${{ env.SRC_PATH }} --configuration Release --no-restore
+
+    - name: Build Tests
+      run: dotnet build ${{ env.TEST_PATH }} --configuration Release --no-restore
+
+    - name: Ejecutar tests unitarios
+      run: dotnet test ${{ env.TEST_PATH }} --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+
+    - name: Publicar resultados de tests
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results
+        path: ${{ env.TEST_PATH }}/**/TestResults/*.trx
+
+  deepsource-analysis:
+    name: DeepSource Code Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Instalar DeepSource CLI
+      run: |
+        curl https://deepsource.io/cli | sh
+        sudo mv ./bin/deepsource /usr/local/bin
+
+    - name: Ejecutar análisis DeepSource
+      run: |
+        deepsource report --analyzer test-coverage --key python --value-file ./coverage/coverage.xml
+      env:
+        DEEPSOURCE_DSN: ${{ env.DEEPSOURCE_DSN }}
+
+  security-analysis:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Verificar vulnerabilidades NuGet
+      run: |
+        echo "=== Verificando vulnerabilidades en proyectos de API ==="
+        dotnet list ${{ env.SRC_PATH }} package --vulnerable
+        echo "=== Verificando vulnerabilidades en proyectos de Test ==="
+        dotnet list ${{ env.TEST_PATH }} package --vulnerable
+
+    - name: Verificar formato de código
+      run: |
+        dotnet format ${{ env.SRC_PATH }} --verify-no-changes --severity info
+        dotnet format ${{ env.TEST_PATH }} --verify-no-changes --severity info
+
+  code-coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    needs: build-and-test
+    
+    steps:
+    - name: Checkout código
+      uses: actions/checkout@v4
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+
+    - name: Ejecutar tests con cobertura
+      run: |
+        dotnet test ${{ env.TEST_PATH }} \
+          --configuration Release \
+          --no-build \
+          --verbosity normal \
+          --collect:"XPlat Code Coverage" \
+          --results-directory ./coverage
+
+    - name: Publicar reporte de cobertura
+      uses: actions/upload-artifact@v3
+      with:
+        name: coverage-report
+        path: ./coverage
