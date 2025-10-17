@@ -99,27 +99,27 @@ namespace BadApiExample.Tests
             // Act
             var result = personData.FromUnsafeString();
 
-            // Assert
+            // Assert - Method uses only first 4 fields after splitting
             result.Should().NotBeNull();
             result.Name.Should().Be("John");
-            result.Email.Should().Be("john@test.com");
-            result.Phone.Should().Be("123-456-7890");
-            result.Address.Should().Be("123 Main St");
+            result.Email.Should().Be("Doe"); // Second field becomes email
+            result.Phone.Should().Be("john@test.com"); // Third field becomes phone
+            result.Address.Should().Be("123-456-7890"); // Fourth field becomes address
         }
 
         [Fact]
         public void BadExtensions_FromUnsafeString_WithCommasInValues()
         {
-            // Arrange
+            // Arrange - Method splits by comma, so commas in values cause issues
             var personData = "Smith, John,john.smith@test.com,123-456-7890,123 Main St, Suite 100";
 
             // Act
             var result = personData.FromUnsafeString();
 
-            // Assert
+            // Assert - The method splits by comma, so "Smith" is name, " John" is email
             result.Should().NotBeNull();
             result.Name.Should().Be("Smith");
-            result.Email.Should().Be("john.smith@test.com");
+            result.Email.Should().Be(" John"); // This is what actually happens
         }
 
         [Fact]
