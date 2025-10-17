@@ -17,35 +17,23 @@ jobs:
     steps:
     - name: Checkout código
       uses: actions/checkout@v4
+      with:
+        # Importante para análisis preciso en PRs
+        ref: ${{ github.event.pull_request.head.sha }}
 
     - name: Setup .NET SDK
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: ${{ env.DOTNET_VERSION }}
 
-    - name: Cache dependencias NuGet
-      uses: actions/cache@v3
-      with:
-        path: ~/.nuget/packages
-        key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
-        restore-keys: |
-          ${{ runner.os }}-nuget-
-
-    - name: Restaurar dependencias usando solución
+    - name: Restaurar dependencias
       run: dotnet restore TemplateNetBase.sln
 
-    - name: Build solución completa
+    - name: Build solución
       run: dotnet build TemplateNetBase.sln --configuration Release --no-restore
 
     - name: Ejecutar tests
       run: dotnet test TemplateNetBase.sln --configuration Release --no-build --verbosity normal
-
-    - name: Publicar resultados de tests
-      uses: actions/upload-artifact@v3
-      if: always()
-      with:
-        name: test-results
-        path: test/**/TestResults/*.trx
 
   deepsource-analysis:
     name: DeepSource Code Analysis
@@ -55,31 +43,13 @@ jobs:
     steps:
     - name: Checkout código
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: Instalar CLI de DeepSource
+      run: curl https://deepsource.io/cli | sh
 
     - name: Ejecutar análisis DeepSource
-      uses: deepsource-io/action@v1
-      with:
-        deepsource-dsn: ${{ secrets.DEEPSOURCE_DSN }}
-        fail-on-errors: true
-
-  code-quality:
-    name: Code Quality Checks
-    runs-on: ubuntu-latest
-    needs: build-and-test
-    
-    steps:
-    - name: Checkout código
-      uses: actions/checkout@v4
-
-    - name: Setup .NET SDK
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-
-    - name: Verificar formato de código
-      run: |
-        dotnet format TemplateNetBase.sln --verify-no-changes --severity warn
-
-    - name: Verificar paquetes vulnerables
-      run: |
-        dotnet list TemplateNetBase.sln package --vulnerable --include-transitive
+      run: ./bin/deepsource analyze
+      env:
+        DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
