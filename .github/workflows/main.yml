@@ -27,23 +27,22 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Restore dependencies
-        run: dotnet restore src/BadApiExample.csproj
+        run: dotnet restore
 
-      - name: Build project
-        run: dotnet build src/BadApiExample.csproj --configuration Release --no-restore
+      - name: Build solution
+        run: dotnet build --configuration Release --no-restore
 
       - name: Run tests with coverage collection
         # Generates a coverage report in Cobertura format
         run: |
-          dotnet test test/BadApiExample.Tests.csproj \
+          dotnet test \
             --configuration Release \
-            --no-build \
             --collect:"XPlat Code Coverage" \
             --results-directory /tmp/test-results/
 
       - name: Find and print coverage file
         run: |
-          find /tmp/test-results -name "*.xml" | head -1 | xargs cat || echo "Coverage file not found."
+          find /tmp/test-results -name "coverage.cobertura.xml" -type f | head -1 | xargs cat || echo "Coverage file not found."
 
       - name: Install DeepSource CLI
         run: curl -s https://deepsource.io/cli | sh
@@ -51,9 +50,15 @@ jobs:
       - name: Report coverage to DeepSource
         # Reports the coverage file to DeepSource
         run: |
-          ./bin/deepsource report \
-            --analyzer test-coverage \
-            --key csharp \
-            --value-file /tmp/test-results/*/coverage.cobertura.xml
+          COVERAGE_FILE=$(find /tmp/test-results -name "coverage.cobertura.xml" -type f | head -1)
+          if [ -f "$COVERAGE_FILE" ]; then
+            ./bin/deepsource report \
+              --analyzer test-coverage \
+              --key csharp \
+              --value-file "$COVERAGE_FILE"
+          else
+            echo "Coverage file not found, skipping DeepSource report"
+            exit 1
+          fi
         env:
           DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
