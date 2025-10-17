@@ -176,3 +176,6 @@ public class PersonController : ControllerBase
         return Ok($"Se eliminaron {allPersons.Count} registros");
     }
 }
+
+// Make Program class accessible for testing
+public partial class Program { }
