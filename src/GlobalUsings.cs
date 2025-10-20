@@ -1,0 +1,12 @@
+global using BadApiExample.Data;
+global using BadApiExample.Data.Repositories;
+global using BadApiExample.Services;
+global using BadApiExample.Services.Implementations;
+global using BadApiExample.Middleware;
+global using BadApiExample.Configuration;
+global using BadApiExample.Models;
+global using BadApiExample.DTOs;
+global using Microsoft.EntityFrameworkCore;
+global using Microsoft.OpenApi.Models;
+global using Microsoft.AspNetCore.Mvc;
+global using System.ComponentModel.DataAnnotations;

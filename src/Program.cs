@@ -1,181 +1,206 @@
 using Microsoft.EntityFrameworkCore;
-using System.ComponentModel.DataAnnotations;
-using Microsoft.AspNetCore.Mvc;
+using BadApiExample.Data;
+using BadApiExample.Data.Repositories;
+using BadApiExample.Services;
+using BadApiExample.Services.Implementations;
+using BadApiExample.Middleware;
+using BadApiExample.Configuration;
+using Microsoft.OpenApi.Models;
+using System.Reflection;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// MALA PRÁCTICA: Cadena de conexión hardcodeada y expuesta
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer("Server=localhost;Database=BadDatabase;User Id=sa;Password=123456;TrustServerCertificate=true;"));
+// Configure logging
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
 
-builder.Services.AddControllers();
+// Configure settings
+builder.Services.Configure<ApiSettings>(
+    builder.Configuration.GetSection(ApiSettings.SectionName));
+
+// Configure database
+var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrEmpty(connectionString))
+{
+    throw new InvalidOperationException("Database connection string is not configured.");
+}
+
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlServer(connectionString, sqlOptions =>
+    {
+        sqlOptions.EnableRetryOnFailure(
+            maxRetryCount: 3,
+            maxRetryDelay: TimeSpan.FromSeconds(5),
+            errorNumbersToAdd: null);
+    });
+    
+    // Only enable sensitive data logging in development
+    if (builder.Environment.IsDevelopment())
+    {
+        options.EnableSensitiveDataLogging();
+        options.EnableDetailedErrors();
+    }
+});
+
+// Configure repositories
+builder.Services.AddScoped<IPersonRepository, PersonRepository>();
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+// Configure services
+builder.Services.AddScoped<IPersonService, PersonService>();
+
+// Configure controllers
+builder.Services.AddControllers(options =>
+{
+    // Add global model validation
+    options.ModelValidatorProviders.Clear();
+});
+
+// Configure API versioning
+builder.Services.AddApiVersioning(opt =>
+{
+    opt.DefaultApiVersion = new Asp.Versioning.ApiVersion(1, 0);
+    opt.AssumeDefaultVersionWhenUnspecified = true;
+    opt.ApiVersionReader = Asp.Versioning.ApiVersionReader.Combine(
+        new Asp.Versioning.UrlSegmentApiVersionReader(),
+        new Asp.Versioning.HeaderApiVersionReader("X-Version"),
+        new Asp.Versioning.QueryStringApiVersionReader("version")
+    );
+}).AddApiExplorer(setup =>
+{
+    setup.GroupNameFormat = "'v'VVV";
+    setup.SubstituteApiVersionInUrl = true;
+});
+
+// Configure API Explorer and Swagger
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(c =>
+{
+    c.SwaggerDoc("v1", new OpenApiInfo 
+    { 
+        Title = "Person Management API", 
+        Version = "v1",
+        Description = "A secure API for managing person records",
+        Contact = new OpenApiContact
+        {
+            Name = "API Support",
+            Email = "support@company.com"
+        }
+    });
+    
+    // Include XML comments if available
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+    {
+        c.IncludeXmlComments(xmlPath);
+    }
+
+    // Configure security definitions for future use
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme (Example: 'Bearer {token}')",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer"
+    });
+});
+
+// Configure CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowSpecificOrigins", policy =>
+    {
+        policy.WithOrigins("https://localhost:7000", "https://yourdomain.com")
+              .AllowAnyMethod()
+              .AllowAnyHeader()
+              .AllowCredentials();
+    });
+});
+
+// Configure health checks
+builder.Services.AddHealthChecks()
+    .AddDbContextCheck<AppDbContext>();
 
 var app = builder.Build();
 
-// MALA PRÁCTICA: Swagger en producción
-app.UseSwagger();
-app.UseSwaggerUI();
+// Configure middleware pipeline
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Person Management API v1");
+        c.RoutePrefix = string.Empty; // Serve Swagger UI at root
+    });
+    app.UseDeveloperExceptionPage();
+}
+else
+{
+    // Global exception handler for production
+    app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
+    app.UseHsts(); // HTTP Strict Transport Security
+}
+
+// Security headers
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    
+    if (!app.Environment.IsDevelopment())
+    {
+        context.Response.Headers.Append("Content-Security-Policy", 
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;");
+    }
+    
+    await next();
+});
 
 app.UseHttpsRedirection();
+app.UseCors("AllowSpecificOrigins");
+
+// Rate limiting (basic implementation)
+app.Use(async (context, next) =>
+{
+    // Basic rate limiting logic can be added here
+    // Consider using AspNetCoreRateLimit package for production
+    await next();
+});
+
+app.UseRouting();
+
+// Authentication and Authorization (when implemented)
+// app.UseAuthentication();
+// app.UseAuthorization();
+
 app.MapControllers();
+app.MapHealthChecks("/health");
 
+// Ensure database is created in development
+if (app.Environment.IsDevelopment())
+{
+    using var scope = app.Services.CreateScope();
+    var context = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    
+    try
+    {
+        context.Database.EnsureCreated();
+        app.Logger.LogInformation("Database initialization completed successfully");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(ex, "An error occurred while initializing the database");
+    }
+}
+
+app.Logger.LogInformation("Person Management API started successfully");
 app.Run();
-
-// MALA PRÁCTICA: Todo en un solo archivo, sin separación de responsabilidades
-public class Person
-{
-    public int Id { get; set; }
-    public string Name { get; set; }
-    public string Email { get; set; }
-    public int Age { get; set; }
-    public string Phone { get; set; }
-    public string Address { get; set; }
-    public DateTime CreatedDate { get; set; }
-    public bool IsActive { get; set; }
-}
-
-public class AppDbContext : DbContext
-{
-    public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
-    
-    public DbSet<Person> Persons { get; set; }
-    
-    // MALA PRÁCTICA: Sin configuración de entidades, sin índices, sin restricciones
-}
-
-[ApiController]
-[Route("api/[controller]")]
-public class PersonController : ControllerBase
-{
-    private readonly AppDbContext _context;
-    
-    public PersonController(AppDbContext context)
-    {
-        _context = context;
-    }
-    
-    // MALA PRÁCTICA: Sin async/await, sin manejo de errores, retorna toda la información
-    [HttpGet]
-    public IActionResult GetAll()
-    {
-        try
-        {
-            // MALA PRÁCTICA: Obtiene TODOS los registros sin paginación
-            var persons = _context.Persons.ToList();
-            return Ok(persons);
-        }
-        catch (Exception ex)
-        {
-            // MALA PRÁCTICA: Expone detalles internos del error
-            return BadRequest($"Error interno del servidor: {ex.Message} - {ex.StackTrace}");
-        }
-    }
-    
-    // MALA PRÁCTICA: Sin validación de parámetros
-    [HttpGet("{id}")]
-    public IActionResult GetById(int id)
-    {
-        // MALA PRÁCTICA: Sin validación si id es válido
-        var person = _context.Persons.Find(id);
-        
-        // MALA PRÁCTICA: Retorna null en lugar de 404
-        return Ok(person);
-    }
-    
-    // MALA PRÁCTICA: Sin validación de modelo, sin DTOs
-    [HttpPost]
-    public IActionResult Create(Person person)
-    {
-        // MALA PRÁCTICA: Sin validaciones
-        person.CreatedDate = DateTime.Now;
-        person.IsActive = true;
-        
-        _context.Persons.Add(person);
-        _context.SaveChanges(); // MALA PRÁCTICA: Sin async
-        
-        // MALA PRÁCTICA: Retorna toda la entidad con datos sensibles
-        return Ok(person);
-    }
-    
-    // MALA PRÁCTICA: Update completo sin validaciones
-    [HttpPut("{id}")]
-    public IActionResult Update(int id, Person person)
-    {
-        // MALA PRÁCTICA: No verifica si existe
-        var existingPerson = _context.Persons.Find(id);
-        
-        // MALA PRÁCTICA: Asignación directa sin validación
-        existingPerson.Name = person.Name;
-        existingPerson.Email = person.Email;
-        existingPerson.Age = person.Age;
-        existingPerson.Phone = person.Phone;
-        existingPerson.Address = person.Address;
-        
-        _context.SaveChanges();
-        
-        return Ok(existingPerson);
-    }
-    
-    // MALA PRÁCTICA: Delete físico sin validaciones
-    [HttpDelete("{id}")]
-    public IActionResult Delete(int id)
-    {
-        var person = _context.Persons.Find(id);
-        
-        // MALA PRÁCTICA: No verifica si existe
-        _context.Persons.Remove(person);
-        _context.SaveChanges();
-        
-        return Ok("Eliminado correctamente");
-    }
-    
-    // MALA PRÁCTICA: Endpoint adicional que hace queries innecesarios
-    [HttpGet("search/{name}")]
-    public IActionResult SearchByName(string name)
-    {
-        // MALA PRÁCTICA: Query ineficiente, sin índices
-        var results = new List<Person>();
-        var allPersons = _context.Persons.ToList(); // Trae TODOS los registros
-        
-        foreach (var p in allPersons)
-        {
-            if (p.Name.Contains(name)) // MALA PRÁCTICA: No usa LIKE en SQL
-            {
-                results.Add(p);
-            }
-        }
-        
-        return Ok(results);
-    }
-    
-    // MALA PRÁCTICA: Endpoint que expone información sensible del sistema
-    [HttpGet("debug/database")]
-    public IActionResult GetDatabaseInfo()
-    {
-        var info = new
-        {
-            ConnectionString = _context.Database.GetConnectionString(),
-            DatabaseName = _context.Database.GetDbConnection().Database,
-            ServerVersion = _context.Database.GetDbConnection().ServerVersion,
-            AllTables = _context.Model.GetEntityTypes().Select(t => t.GetTableName()).ToList()
-        };
-        
-        return Ok(info);
-    }
-    
-    // MALA PRÁCTICA: Endpoint sin autorización que hace operaciones peligrosas
-    [HttpDelete("deleteall")]
-    public IActionResult DeleteAll()
-    {
-        var allPersons = _context.Persons.ToList();
-        _context.Persons.RemoveRange(allPersons);
-        _context.SaveChanges();
-        
-        return Ok($"Se eliminaron {allPersons.Count} registros");
-    }
-}
 
 // Make Program class accessible for testing
 public partial class Program { }
