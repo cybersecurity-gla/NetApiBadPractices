@@ -13,9 +13,11 @@ exclude_patterns = [
 ]
 
 [[analyzers]]
-name = "csharp"
-enabled = true
+  name = "csharp"
+  enabled = true
+  [analyzers.meta]
+  cyclomatic_complexity_threshold = "low"
 
 [[analyzers]]
-name = "test-coverage"
-enabled = true
+  name = "test-coverage"
+  enabled = true
