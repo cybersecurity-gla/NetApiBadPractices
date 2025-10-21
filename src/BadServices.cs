@@ -4,7 +4,7 @@ using Microsoft.EntityFrameworkCore;
 public class BadDataService
 {
     // MALA PRÁCTICA: Singleton con estado mutable
-    public static BadDataService Instance = new BadDataService();
+    public static BadDataService Instance = new();
     
     private string connectionString = "Server=localhost;Database=BadDatabase;User Id=sa;Password=123456;TrustServerCertificate=true;";
     
